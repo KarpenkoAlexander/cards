@@ -24,4 +24,5 @@ public class CounterConsumer implements Consumer<Event> {
     public int getAlbumFinished() {
         return albumFinished;
     }
+
 }

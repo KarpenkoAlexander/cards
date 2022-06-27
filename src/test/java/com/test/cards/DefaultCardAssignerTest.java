@@ -15,6 +15,7 @@ import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 import static com.google.common.collect.Sets.newHashSet;
@@ -52,49 +53,40 @@ public class DefaultCardAssignerTest {
     }
 
     @Test
-    public void check_NotNull_Album() throws InterruptedException {
+    public void check_NotNull_Album() {
         Assert.assertNotNull(configurationProvider.get());
     }
 
     @Test
     public void assign_3Cards_For_2Users_And_Expect_SetFinished_EventFired() {
-        int userId = 1;
         final List<Event> events = new ArrayList<>();
         cardAssigner.subscribe(events::add);
+        Iterator<AlbumSet> setIterator = configurationProvider.get().sets.iterator();
 
-        cardAssigner.assignCard(userId, 1);
-        cardAssigner.assignCard(userId, 2);
-        cardAssigner.assignCard(userId, 3);
-
+        final int userId = 1;
+        setIterator.next().cards.forEach(card -> cardAssigner.assignCard(userId, card.id));
         cardAssigner.assignCard(userId, 3); // duplicate card won't populate event
         assertEquals(1, events.size());
         Event event = events.get(0);
         assertEquals(userId, event.userId);
         assertEquals(SET_FINISHED, event.type);
 
-        userId = 2;
-        cardAssigner.assignCard(userId, 4);
-        cardAssigner.assignCard(userId, 5);
-        cardAssigner.assignCard(userId, 6);
+        final int userId_ = 2;
+        setIterator.next().cards.forEach(card -> cardAssigner.assignCard(userId_, card.id));
         assertEquals(2, events.size());
         event = events.get(1);
-        assertEquals(userId, event.userId);
+        assertEquals(userId_, event.userId);
         assertEquals(SET_FINISHED, event.type);
     }
 
     @Test
     public void assign_6_Cards_And_Expect_AlbumFinishedEventFired() {
-        final int userId = 1;
         final List<Event> events = new ArrayList<>();
         cardAssigner.subscribe(events::add);
 
-        cardAssigner.assignCard(userId, 1);
-        cardAssigner.assignCard(userId, 2);
-        cardAssigner.assignCard(userId, 3);
-        cardAssigner.assignCard(userId, 4);
-        cardAssigner.assignCard(userId, 5);
-        cardAssigner.assignCard(userId, 6);
-
+        final int userId = 1;
+        configurationProvider.get().sets.stream().flatMap(set -> set.cards.stream())
+                .forEach(card -> cardAssigner.assignCard(userId, card.id));
         cardAssigner.assignCard(userId, 6); // duplicate card won't populate event
         assertEquals(3, events.size());
         final Event event = events.get(2);

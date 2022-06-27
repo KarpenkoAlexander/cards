@@ -5,22 +5,24 @@ import com.test.cards.domain.AlbumSet;
 import com.test.cards.domain.Card;
 import com.test.cards.domain.Event;
 
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.function.Consumer;
 
 public class DefaultCardAssigner implements CardAssigner {
 
-    private final Map<Long, Album> userAlbumMap = new ConcurrentHashMap<>();
-    private final Map<Long, AlbumSet> albumSetMap = new ConcurrentHashMap<>();
-    private final Map<Long, Card> cardsMap = new ConcurrentHashMap<>();
     private final int FIXED_CARD_NUM_IN_SET = 3;
     private final int FIXED_CARD_NUM_IN_ALBUM = 6;
     private final List<Consumer<Event>> subscribers = new ArrayList<>();
     private final Album fullAlbum;
-    private final List<Event> events = new ArrayList<>();
-    private final Object monitor = new Object();
-
+    private final Map<Long, AlbumSet> albumSetMap = new HashMap<>();
+    private final Map<Long, Card> cardsMap = new HashMap<>();
+    private final Map<Long, Album> userAlbumMap = new HashMap<>();
 
     public DefaultCardAssigner(ConfigurationProvider configurationProvider) {
         this.fullAlbum = configurationProvider.get();
@@ -33,17 +35,22 @@ public class DefaultCardAssigner implements CardAssigner {
     }
 
     @Override
-    synchronized public void assignCard(long userId, long cardId) {
-        Album album = userAlbumMap.get(userId);
-        Album userAlbum = Optional.ofNullable(album).orElseGet(() -> createUserAlbum(userId));
-        boolean isAlbumSetFull = addCardToAlbumSet(cardId, userAlbum);
-
-        if (isAlbumSetFull) {
-            triggerEvent(new Event(userId, Event.Type.SET_FINISHED));
+    public void assignCard(long userId, long cardId) {
+        Album userAlbum;
+        synchronized (userAlbumMap) {
+            Album album = userAlbumMap.get(userId);
+            userAlbum = Optional.ofNullable(album).orElseGet(() -> createUserAlbum(userId));
         }
+        synchronized (userAlbum.sets) {
+            boolean isAlbumSetFull = addCardToAlbumSet(cardId, userAlbum);
 
-        if (isAlbumSetFull && isAlbumFull(userAlbum)) {
-            triggerEvent(new Event(userId, Event.Type.ALBUM_FINISHED));
+            if (isAlbumSetFull) {
+                triggerEvent(new Event(userId, Event.Type.SET_FINISHED));
+            }
+
+            if (isAlbumSetFull && isAlbumFull(userAlbum)) {
+                triggerEvent(new Event(userId, Event.Type.ALBUM_FINISHED));
+            }
         }
     }
 
@@ -52,7 +59,6 @@ public class DefaultCardAssigner implements CardAssigner {
                 .mapToInt(set -> set.cards.size())
                 .sum();
         return totalSet == FIXED_CARD_NUM_IN_ALBUM;
-
     }
 
     private boolean addCardToAlbumSet(long cardId, Album userAlbum) {
@@ -63,15 +69,8 @@ public class DefaultCardAssigner implements CardAssigner {
                 .filter(albumSetUser -> albumSetUser.id == albumSet.id)
                 .findFirst()
                 .get();
-        //System.out.println(userAlbumSet.cards.getClass());
-       // synchronized (userAlbumSet.cards) {
-            if (userAlbumSet.cards.size() == FIXED_CARD_NUM_IN_SET) {
-                return false;
-            }
-            return userAlbumSet.cards.add(card) && userAlbumSet.cards.size() == FIXED_CARD_NUM_IN_SET;
-    //    }
+        return userAlbumSet.cards.add(card) && userAlbumSet.cards.size() == FIXED_CARD_NUM_IN_SET;
     }
-
 
     private Album createUserAlbum(Long userId) {
         final Album album = new Album(fullAlbum.id, fullAlbum.name, Collections.synchronizedSet(new HashSet<>()));
@@ -87,11 +86,9 @@ public class DefaultCardAssigner implements CardAssigner {
         subscribers.add(consumer);
     }
 
-    private List<Event> triggerEvent(Event event) {
+    private void triggerEvent(Event event) {
         for (Consumer<Event> subscriber : subscribers) {
             subscriber.accept(event);
         }
-        events.add(event);
-        return events;
     }
 }

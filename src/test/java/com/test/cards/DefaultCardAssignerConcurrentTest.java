@@ -7,19 +7,23 @@ import com.google.code.tempusfugit.concurrency.annotations.Repeating;
 import com.test.cards.domain.Album;
 import com.test.cards.domain.AlbumSet;
 import com.test.cards.domain.Card;
+import com.test.cards.domain.Event;
 import com.test.cards.service.CardAssigner;
 import com.test.cards.service.ConfigurationProvider;
 import com.test.cards.service.DefaultCardAssigner;
 import org.junit.*;
 
 import org.junit.Rule;
-//import org.junit.jupiter.api.Test;
-
 
 import java.util.*;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 import static com.google.common.collect.Sets.newHashSet;
+import static com.test.cards.domain.Event.Type.ALBUM_FINISHED;
+import static com.test.cards.domain.Event.Type.SET_FINISHED;
+import static java.util.concurrent.Executors.newFixedThreadPool;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.LongStream.range;
 import static org.junit.Assert.assertEquals;
@@ -30,9 +34,8 @@ import static org.mockito.Mockito.when;
 public class DefaultCardAssignerConcurrentTest {
     private static CardAssigner cardAssigner;
     private static CounterConsumer counter = new CounterConsumer();
-
-    private static List<Long> userCards = generateUserIds(10);
-
+    private static List<Long> users = generateUserIds(5);
+    private final int SIX_CARDS = 6;
     private static ConfigurationProvider configurationProvider;
 
     @BeforeClass
@@ -61,28 +64,55 @@ public class DefaultCardAssignerConcurrentTest {
     @Rule
     public RepeatingRule rule = new RepeatingRule();
 
-
-    @Test
+    @Test(timeout = 60000L)
     @Concurrent(count = 1000)
-    @Repeating(repetition = 1)
-    public void runsMultipleTimesRandom() {
-        int userId = ThreadLocalRandom.current().nextInt(0, 2);
-        int cardId = ThreadLocalRandom.current().nextInt(0, 6);
+    @Repeating(repetition = 10)
+    public void assign_In_Concurrent_Environment() {
+        int userId = ThreadLocalRandom.current().nextInt(0, users.size());
+        int cardId = ThreadLocalRandom.current().nextInt(0, SIX_CARDS);
         cardAssigner.assignCard(userId, cardId);
-
     }
 
     @AfterClass
-    public static void annotatedTestRunsMultipleTimes() throws InterruptedException {
-        assertEquals(4, counter.getSetFinished());
-        assertEquals(2, counter.getAlbumFinished());
+    public static void assert_Concurrent_Results() {
+        assertEquals(users.size() * 2, counter.getSetFinished());
+        assertEquals(users.size(), counter.getAlbumFinished());
     }
 
-    private static List<Long> generateUserIds(long size) {
-        return range(0L, size)
-                .boxed()
-                .collect(toList());
+    @Test(timeout = 60000L)
+    public void assign_In_Concurrent_Environment_Custom() {
+        List<Event> newEvents = Collections.synchronizedList(new ArrayList<>());
+        DefaultCardAssigner newCardAssigner = new DefaultCardAssigner(configurationProvider);
+        newCardAssigner.subscribe(newEvents::add);
+        final Album album = configurationProvider.get();
+
+        final ExecutorService executorService = newFixedThreadPool(10);
+        while (!isAlbumFinished(newEvents, album)) {
+            executorService.submit(() -> {
+                int cardId = ThreadLocalRandom.current().nextInt(0, SIX_CARDS);
+                int userId = ThreadLocalRandom.current().nextInt(0, users.size());
+                newCardAssigner.assignCard(userId, cardId);
+            });
+        }
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(1000, TimeUnit.MILLISECONDS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+        }
+        long countAlbums = newEvents.stream().filter(event -> event.type == ALBUM_FINISHED).count();
+        long countSets = newEvents.stream().filter(event -> event.type == SET_FINISHED).count();
+        assertEquals(users.size() * 2, countSets);
+        assertEquals(users.size(), countAlbums);
     }
 
+    private boolean isAlbumFinished(List<Event> events, Album album) {
+        return events.size() == users.size() + users.size() * album.sets.size();
+    }
 
+    private static List<Long> generateUserIds(int max) {
+        return range(0, max).boxed().collect(toList());
+    }
 }
